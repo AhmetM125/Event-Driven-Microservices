@@ -1,0 +1,150 @@
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL (Database-per-service via multiple logical databases)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    container_name: eventdrivenshop-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shop-network
+
+  # ---------------------------------------------------------------------------
+  # RabbitMQ Message Broker with Management UI
+  # ---------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: eventdrivenshop-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - shop-network
+
+  # ---------------------------------------------------------------------------
+  # Distributed Tracing (Jaeger All-In-One with OTLP endpoint)
+  # ---------------------------------------------------------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:1.56
+    container_name: eventdrivenshop-jaeger
+    restart: unless-stopped
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686" # Jaeger Web UI
+      - "4317:4317"   # OTLP gRPC receiver
+    networks:
+      - shop-network
+
+  # ---------------------------------------------------------------------------
+  # Order Microservice
+  # ---------------------------------------------------------------------------
+  order-service:
+    build:
+      context: .
+      dockerfile: src/Services/Orders/EventDrivenShop.OrderService.Api/Dockerfile
+    container_name: eventdrivenshop-orders
+    restart: on-failure
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__OrdersDb=Host=postgres;Port=5432;Database=orders_db;Username=postgres;Password=postgres
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__Username=guest
+      - RabbitMQ__Password=guest
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+    ports:
+      - "${ORDER_SERVICE_HTTP_PORT:-5001}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - shop-network
+
+  # ---------------------------------------------------------------------------
+  # Payment Microservice
+  # ---------------------------------------------------------------------------
+  payment-service:
+    build:
+      context: .
+      dockerfile: src/Services/Payments/EventDrivenShop.PaymentService.Api/Dockerfile
+    container_name: eventdrivenshop-payments
+    restart: on-failure
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__PaymentsDb=Host=postgres;Port=5432;Database=payments_db;Username=postgres;Password=postgres
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__Username=guest
+      - RabbitMQ__Password=guest
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+    ports:
+      - "${PAYMENT_SERVICE_HTTP_PORT:-5002}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - shop-network
+
+  # ---------------------------------------------------------------------------
+  # Notification Microservice
+  # ---------------------------------------------------------------------------
+  notification-service:
+    build:
+      context: .
+      dockerfile: src/Services/Notifications/EventDrivenShop.NotificationService.Api/Dockerfile
+    container_name: eventdrivenshop-notifications
+    restart: on-failure
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__NotificationsDb=Host=postgres;Port=5432;Database=notifications_db;Username=postgres;Password=postgres
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__Username=guest
+      - RabbitMQ__Password=guest
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+    ports:
+      - "${NOTIFICATION_SERVICE_HTTP_PORT:-5003}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - shop-network
+
+volumes:
+  postgres_data:
+  rabbitmq_data:
+
+networks:
+  shop-network:
+    driver: bridge

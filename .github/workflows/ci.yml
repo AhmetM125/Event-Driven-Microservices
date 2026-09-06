@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    name: Build & Test Solution
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+
+    - name: Restore Dependencies
+      run: dotnet restore EventDrivenShop.sln
+
+    - name: Build Solution
+      run: dotnet build EventDrivenShop.sln --no-restore --configuration Release
+
+    - name: Execute Unit, Integration & E2E Tests
+      run: dotnet test EventDrivenShop.sln --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage"
